@@ -16,6 +16,12 @@
 
 // based at dialog_example.c example file
 /* INCLUDES */    
+
+#include <sql_class.h>
+/*
+#include <key.h>
+#include <records.h>
+*/
 #include <mysql/plugin_auth.h>
 #include <string.h>
 #include <stdio.h>
@@ -46,8 +52,8 @@ CREATE TABLE `otp_user` (
 */
 
 /* Name of table where OTP information resides */
-const LEX_STRING db_name = {C_STRING_WITH_LEN("mysql")}
-const LEX_STRING table_name = {C_STRING_WITH_LEN("otp_user")}
+const LEX_STRING db_name = {C_STRING_WITH_LEN("mysql")};
+const LEX_STRING table_name = {C_STRING_WITH_LEN("otp_user")};
 
 /* STRUCTS / ENUMS */
 
@@ -94,14 +100,17 @@ struct otp_user_info{
   unsigned int bf_block_time;	/* unix time stamp */
   char *wellknown_passwords;	/* must check how to create a list of passwords separated by ";" */
   
-  bool struct_changed;		/* true = must update table */
+  bool changed;		        /* true = must update table */
   unsigned int calc_counter;	/* used to calculate hotp */
   double calc_time;		/* used to calculate totp */
 };
 /* PLUGIN FUNCTIONS */
 
 /* helper function to read otp row */
-bool read_otp_table(host,user,otp_structure){		/* return false/true, false = no login, maybe otp table don't exists? */
+bool read_otp_table(const char *host, unsigned int host_len,
+                    const char *user, unsigned int user_len,
+                    struct otp_user_info *uinfo){ 
+  /* return false/true, false = no login, maybe otp table don't exists? */
   // open table
   //   return false if error (table not found)
   // get host/user record
@@ -114,9 +123,13 @@ bool read_otp_table(host,user,otp_structure){		/* return false/true, false = no 
   // create a list of well known password
   
   // return true
+  return TRUE;
 }
 /* helper functino to write otp row */
-bool write_otp_table(host,user,otp_structure){		/* return false/true, false = error while writing to table */
+bool write_otp_table(const char *host,unsigned int host_len,
+                     const char *user,unsigned int user_len,
+                     struct otp_user_info *uinfo){	
+/* return false/true, false = error while writing to table */
   // open table
   //   return false if error (table not found)
   // find host/user record
@@ -125,10 +138,12 @@ bool write_otp_table(host,user,otp_structure){		/* return false/true, false = er
   // close table
   // return true
 }
-bool create_userotp_from_string(host,use,auth_string){
+bool create_userotp_from_string(const char *host,unsigned int host_len,
+                                const char *user,unsigned int user_len,
+                                const char *auth_string){
 }
 /* helper function to check if we found a well known password, and if found remove it from list and return true */
-bool check_and_update_wkn_password(password,otp_structure){/* return false/true, false = no password match, update the structure if found, removing the password */
+bool check_and_update_wkn_password(unsigned char *password,struct otp_user_info *uinfo){/* return false/true, false = no password match, update the structure if found, removing the password */
   // interact wkn password list (maybe a hash index?)
   // if not found, return false
   // remove wkn password from list
@@ -136,35 +151,35 @@ bool check_and_update_wkn_password(password,otp_structure){/* return false/true,
   // return true
 }
 /* helper function to increase brute force counter */
-void brute_force_incr(otp_user_info* otp_row){
+void brute_force_incr(struct otp_user_info* otp_row){
   // check if we will not overflow
-  if(otp_row.bf_count<otp_row.bf_max){
-    otp_row.bf_count++;	/* possible problem with overflow ? */
-    otp_row.changed=TRUE;
+  if(otp_row->bf_count<otp_row->bf_max){
+    otp_row->bf_count++;	/* possible problem with overflow ? */
+    otp_row->changed=TRUE;
   }
 }
 /* helper function to reset brute force counter */
-void brute_force_reset(otp_user_info* otp_row){
-  otp_row.bf_count=0;
-  otp_row.bf_block_time=0;
-  otp_row.changed=TRUE;
+void brute_force_reset(struct otp_user_info* otp_row){
+  otp_row->bf_count=0;
+  otp_row->bf_block_time=0;
+  otp_row->changed=TRUE;
 }
 /* helper function to sync calc time/counter to table counter */
-void sync_otp_counter_time(otp_user_info* otp_row){
-  otp_row.counter=otp_row.calc_counter;
-  otp_row_changed=TRUE;
+void sync_otp_counter_time(struct otp_user_info* otp_row){
+  otp_row->counter=otp_row->calc_counter;
+  otp_row->changed=TRUE;
 }
 /* helper function to sync last access */
-void sync_last_access(otp_user_info* otp_row){
+void sync_last_access(struct otp_user_info* otp_row){
   my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
-  otp_row.last_access=now.val;
-  otp_row.changed=TRUE;
+  otp_row->last_access=now.val;
+  otp_row->changed=TRUE;
 }
 /* helper function to bf block */
-void bf_block(otp_user_info* otp_row){
+void bf_block(struct otp_user_info* otp_row){
   my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
-  otp_row.bf_block_time=now.val + otp_row.bf_timeout;
-  otp_row.changed=TRUE;
+  otp_row->bf_block_time=now.val + otp_row->bf_timeout;
+  otp_row->changed=TRUE;
 }
 /* helper function to calculate time value */
 double calc_time(double time,unsigned int skew,unsigned int time_step){
@@ -223,9 +238,9 @@ bool create_skey(otp_user_info* otp_row,char* otp_password){ /* 	ftp://ftp.ntua.
 bool create_user_otp(otp_user_info* otp_row,char* otp_password){ 
 			/*	receive user otp table row and select what key should be used 
 				https://code.google.com/p/google-authenticator/source/browse/#git%2Flibpam */
-  if(otp_row.otp_type==TOTP)
+  if(otp_row->otp_type==TOTP)
     return create_totp(otp_row,otp_password);
-  if(otp_row.otp_type==HOTP)
+  if(otp_row->otp_type==HOTP)
     return create_totp(otp_row,otp_password);
 //  if(otp_row.otp_type==SKEY)
 //    return create_skey(otp_row,otp_password);
@@ -235,10 +250,11 @@ bool create_user_otp(otp_user_info* otp_row,char* otp_password){
 /* MYSQL AUTH PLUGIN FUNCTIONS */
 static int otp_auth_interface(MYSQL_PLUGIN_VIO *vio, MYSQL_SERVER_AUTH_INFO *info)
 {
+  THD* thd;
 /*
 the structure...
 
-1) get information from otp table   
+1) get information from otp table
 2) check brute force
 3) restart brute force after timeout
 4) ask user password / otp password
@@ -267,11 +283,16 @@ the structure...
   int pkt_len;
   my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
   otp_user_info otp_row;
+
+  const char *user = info->user_name;
+  unsigned int user_len = info->user_name_length;
+  const char *host = info->host_or_ip;
+  unsigned int host_len = info->host_or_ip_length;
   
   /* 1)get information from otp table  */
-  if(read_otp_table(host,user,otp_row)!=TRUE){
+  if(read_otp_table(host,host_len,user,user_len,&otp_row)!=TRUE){
     // create from auth string ?
-    if(create_userotp_from_string!=TRUE)
+    if(create_userotp_from_string(host,host_len,user,user_len,info->auth_string)!=TRUE)
       return CR_ERROR; /* sorry */
   }
   
@@ -280,7 +301,7 @@ the structure...
     if(otp_row.bf_block_time>now.val)
       return CR_ERROR; /* sorry */
     /* 3) restart brute force after timeout */
-    brute_force_reset(otp_row);
+    brute_force_reset(&otp_row);
   }
   
   /* 4) ask user password / otp password */
@@ -288,16 +309,16 @@ the structure...
                         (const unsigned char *) PASSWORD_QUESTION "Password, please:",
                         18)){
     /* 5) increase brute force if bad password */
-    brute_force_incr(otp_row);
-    write_otp_table();
+    brute_force_incr(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_ERROR;
   }
 
   /* read the answer */
   if ((pkt_len= vio->read_packet(vio, &pkt)) < 0){
     /* 5) increase brute force if bad password */
-    brute_force_incr(otp_row);
-    write_otp_table();
+    brute_force_incr(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_ERROR;
   }
   info->password_used= PASSWORD_USED_YES;
@@ -305,8 +326,8 @@ the structure...
   /* CHECK USER PASSWORD (mysql.user table) */
   if (strcmp((const char *) pkt, info->auth_string)){
     /* 5) increase brute force if bad password */
-    brute_force_incr(otp_row);
-    write_otp_table();
+    brute_force_incr(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_ERROR;
   }
 
@@ -315,26 +336,26 @@ the structure...
                         (const unsigned char *) LAST_QUESTION "OTP:", /* INCLUDE OTP TYPE? */
                         5)){
     /* 5) increase brute force if bad password */
-    brute_force_incr(otp_row);
-    write_otp_table();		/* must save if we reseted bf at startup */
+    brute_force_incr(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_ERROR;
   }
 
   /* read the answer */
   if ((pkt_len= vio->read_packet(vio, &pkt)) < 0){
     /* 5) increase brute force if bad password */
-    brute_force_incr(otp_row);
-    write_otp_table();
+    brute_force_incr(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_ERROR;
   }
 /* END OF DIALOG */
   
   
   /* 6) check wellknown password */
-  if(check_and_update_wkn_password(pkt,otp_structure)){
+  if(check_and_update_wkn_password(pkt,&otp_row)){
     /* 6.2) save structure and accept login */
-    brute_force_reset(otp_row);
-    write_otp_table();
+    brute_force_reset(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_OK;
   }
   
@@ -353,36 +374,36 @@ the structure...
     otp_row.calc_time=calc_time(now.val,cur_skew,otp_row.time_step);
     cur_skew++;
     /* 9) create otp using current counter/time */
-    create_user_otp(otp_row,current_otp_password);
+    create_user_otp(&otp_row,current_otp_password);
     
     /* 10) check created otp with user otp */
     if (strcmp((const char *) pkt, current_otp_password)){
       /* 10.1) if ok check only one login otp */
       if (otp_row.one_access==FALSE){
         /* 10.3) accept login if match and one login is ok, or one login is off */
-        brute_force_reset(otp_row);
+        brute_force_reset(&otp_row);
 	/* sync current calc counter */
-	sync_otp_counter_time(otp_row);
-        write_otp_table();
+	sync_otp_counter_time(&otp_row);
+        write_otp_table(host,host_len,user,user_len,&otp_row);
         return CR_OK;
       }else if (otp_row.otp_type==TOTP && otp_row.last_time==otp_row.calc_time){
         /* 10.3) accept login if match and one login is ok, or one login is off */
-        brute_force_reset(otp_row);
+        brute_force_reset(&otp_row);
 	/* sync current calc counter */
-	sync_otp_counter_time(otp_row);
-        write_otp_table();
+	sync_otp_counter_time(&otp_row);
+        write_otp_table(host,host_len,user,user_len,&otp_row);
         return CR_OK;
       }else if (otp_row.otp_type==HOTP && otp_row.last_counter==otp_row.calc_counter){
         /* 10.3) accept login if match and one login is ok, or one login is off */
-        brute_force_reset(otp_row);
+        brute_force_reset(&otp_row);
 	/* sync current calc counter */
-	sync_otp_counter_time(otp_row);
-        write_otp_table();
+	sync_otp_counter_time(&otp_row);
+        write_otp_table(host,host_len,user,user_len,&otp_row);
         return CR_OK;
       }
       /* 10.2) increase brute force counter if not match */
-      brute_force_incr(otp_row);
-      write_otp_table();
+      brute_force_incr(&otp_row);
+      write_otp_table(host,host_len,user,user_len,&otp_row);
       return CR_ERROR;
     }
     
@@ -392,8 +413,8 @@ the structure...
       continue;
     }
     /* 12) if we don't have a otp match, and we got max of skew counter, we got a bad password, increase brute force counter */
-    brute_force_incr(otp_row);
-    write_otp_table();
+    brute_force_incr(&otp_row);
+    write_otp_table(host,host_len,user,user_len,&otp_row);
     return CR_ERROR;
   }
   /* should never be here */
@@ -424,7 +445,7 @@ my_bool GET_OTP_init(UDF_INIT *initid, UDF_ARGS *args, char *message) {
     if (args->arg_count == 2) {
         // one specific user
 	/* check permission (GRANT level ) */
-        if (check_global_access(thd, PROCESS_ACL, true))
+      // if (check_global_access(thd, PROCESS_ACL, true))
           return 1; /* error */
     } else {
 	// current user OTP 
@@ -442,16 +463,16 @@ char *GET_OTP(UDF_INIT *initid, UDF_ARGS *args, char *result,
                unsigned long *length, char *is_null, char *error) {
     /* with the current user information, return the current OTP password using create_user_otp() function; */
     my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
-    char otp_password
-    otp_user_info otp_row;
-    
-    if(read_otp_table(args->args[0],args->args[1],otp_row)!=TRUE){
+    char *otp_password;
+    struct otp_user_info otp_row;
+    /*
+    if(read_otp_table(args->args[0],args->args[1],&otp_row)!=TRUE){
 	*is_null = 1;
 	return 0;
-    }
+        }*/
     otp_row.calc_counter=otp_row.counter;
     otp_row.calc_time=calc_time(now.val,0,otp_row.time_step);
-    create_user_otp(otp_user_info* otp_row,char* otp_password){
+    //    create_user_otp(struct otp_user_info* otp_row,char* otp_password);
     
     *length = (unsigned long)strlen(otp_password);
     return initid->ptr;
