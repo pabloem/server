@@ -110,6 +110,15 @@ struct otp_user_info{
 bool read_otp_table(const char *host, unsigned int host_len,
                     const char *user, unsigned int user_len,
                     struct otp_user_info *uinfo){ 
+  //uinfo->secret = "sharedsecret123"; // Can work w this later
+  uinfo->time_step = 30;
+  uinfo->counter = 0; // ?
+  uinfo->ct_skew = 0; // Start with 0, we can try more later
+  uinfo->bf_max = 1; // We can try with one bf attempt max
+  uinfo->bf_timeout = 900; // lock login for 15 minutes!
+  uinfo->one_access = FALSE;
+  uinfo->wellknown_passwords = (char *)malloc(sizeof("ab;12;hi;;"));
+  strcpy(uinfo->wellknown_passwords,"ab;12;hi;;");
   /* return false/true, false = no login, maybe otp table don't exists? */
   // open table
   //   return false if error (table not found)
@@ -137,18 +146,79 @@ bool write_otp_table(const char *host,unsigned int host_len,
   // write record
   // close table
   // return true
+  return TRUE;
 }
 bool create_userotp_from_string(const char *host,unsigned int host_len,
                                 const char *user,unsigned int user_len,
                                 const char *auth_string){
 }
+
+
+/* Function: write_token
+   Return: TRUE if there are more tokens to be read. FALSE otherwise.
+   Arguments:
+   - t_start - Pointer that we set to the beginning of the next token
+   - len - Size of the token that we parsed
+   - str - String containing list of tokens
+   - start - Counter to keep track of how much we have parsed so far
+   - delimiter - The character that we will use to separate tokens
+ */
+bool write_token(char **t_start, int *len, char *str, int *p_start, 
+                 char delimiter){
+  *t_start = str+*p_start;
+  *len = 0;
+  while(*(*t_start+*len) != '\0' && *(*t_start+*len) != delimiter){
+    *len += 1;
+    *p_start += 1;
+  }
+  if(**t_start == '\0' && *(str+*p_start) == '\0') return FALSE;
+  *p_start += 1;
+  return TRUE;
+}
+
+/* Function: remove_token
+   Shifts characters from writing_head+token_len a total of token_len places to
+   the left.
+   Requires: Requires a null-terminated string.
+   Arguments:
+   - writing_head - This points to the first location that we want to overwrite
+   - token_len - This is the length of the section we want to overwrite
+ */
+bool remove_token(char *writing_head, int token_len){
+  char *reading_head = writing_head+token_len;
+  while(*reading_head != '\0'){
+    *writing_head = *reading_head;
+    writing_head+=1;
+    reading_head+=1;
+  }
+  *writing_head = *reading_head;
+  return TRUE;
+}
 /* helper function to check if we found a well known password, and if found remove it from list and return true */
-bool check_and_update_wkn_password(unsigned char *password,struct otp_user_info *uinfo){/* return false/true, false = no password match, update the structure if found, removing the password */
-  // interact wkn password list (maybe a hash index?)
-  // if not found, return false
-  // remove wkn password from list
-  // mark otp_structure as changed
-  // return true
+bool check_and_update_wkn_password(unsigned char *password,struct otp_user_info *uinfo){
+/* return false/true, false = no password match, update the structure if found, removing the password */
+  char *token;
+  int t_len = 0;
+  bool moreTokens = TRUE;
+  int parse_ind = 0;
+  while(1){
+    moreTokens = write_token(&token,&t_len,
+                             uinfo->wellknown_passwords, &parse_ind,
+                             ';');
+    /* If token length is zero (no token was found), 
+       or the strings do not match, we either parse again or leave */
+    if(t_len == 0 || strncmp((const char *)token,(const char *)password,t_len)){
+      if(moreTokens) continue;
+      //else
+      return FALSE;
+    }
+    /* Before returning true, we know that token and t_len contain the password
+       that should be removed from the list. We remove it and mark the struct as
+       changed. */
+    remove_token(token,t_len);
+    uinfo->changed = TRUE;
+    return TRUE;
+  }
 }
 /* helper function to increase brute force counter */
 void brute_force_incr(struct otp_user_info* otp_row){
@@ -486,7 +556,7 @@ mysql_declare_plugin(dialog)
   MYSQL_AUTHENTICATION_PLUGIN,
   &otp_handler,
   "otp_auth",
-  "Roberto Spadim - Spaempresarial Brazil",
+  "Roberto Spadim / Pablo Estrada",
   "Dialog otp auth plugin",
   PLUGIN_LICENSE_GPL,
   NULL,
