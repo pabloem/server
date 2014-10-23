@@ -15,13 +15,12 @@
     Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA */
 
 // based at dialog_example.c example file
-/* INCLUDES */    
-
-#include <sql_class.h>
-/*
+/* INCLUDES */
+#define MYSQL_SERVER
+#include "sql_base.h"
 #include <key.h>
 #include <records.h>
-*/
+
 #include <mysql/plugin_auth.h>
 #include <string.h>
 #include <stdio.h>
@@ -54,6 +53,7 @@ CREATE TABLE `otp_user` (
 /* Name of table where OTP information resides */
 const LEX_STRING db_name = {C_STRING_WITH_LEN("mysql")};
 const LEX_STRING table_name = {C_STRING_WITH_LEN("otp_user")};
+static MEM_ROOT mem;
 
 /* STRUCTS / ENUMS */
 
@@ -95,7 +95,6 @@ struct otp_user_info{
   bool one_access;		/* true/false if we only allow one connection per otp  */
   unsigned int last_counter;	
   double last_time;		/* unix time stamp */
-  double last_access;		/* unix time stamp */
   unsigned int bf_count;
   unsigned int bf_block_time;	/* unix time stamp */
   char *wellknown_passwords;	/* must check how to create a list of passwords separated by ";" */
@@ -110,15 +109,6 @@ struct otp_user_info{
 bool read_otp_table(const char *host, unsigned int host_len,
                     const char *user, unsigned int user_len,
                     struct otp_user_info *uinfo){ 
-  //uinfo->secret = "sharedsecret123"; // Can work w this later
-  uinfo->time_step = 30;
-  uinfo->counter = 0; // ?
-  uinfo->ct_skew = 0; // Start with 0, we can try more later
-  uinfo->bf_max = 1; // We can try with one bf attempt max
-  uinfo->bf_timeout = 900; // lock login for 15 minutes!
-  uinfo->one_access = FALSE;
-  uinfo->wellknown_passwords = (char *)malloc(sizeof("ab;12;hi;;"));
-  strcpy(uinfo->wellknown_passwords,"ab;12;hi;;");
   /* return false/true, false = no login, maybe otp table don't exists? */
   // open table
   //   return false if error (table not found)
@@ -132,6 +122,52 @@ bool read_otp_table(const char *host, unsigned int host_len,
   // create a list of well known password
   
   // return true
+
+  THD* thd = current_thd;
+  TABLE_LIST tables;
+  READ_RECORD read_record_info;
+  TABLE *table;
+  int error;
+
+  tables.init_one_table(db_name.str,db_name.length,
+                        table_name.str,table_name.length,
+                        table_name.str, TL_READ);
+  open_and_lock_tables(thd,&tables,FALSE,MYSQL_LOCK_IGNORE_TIMEOUT);
+  table = tables.table;
+  init_read_record(&read_record_info,thd,table,NULL,1,0,FALSE);
+
+  table->use_all_columns();
+
+  LEX_STRING u_name;
+  LEX_STRING host_name;
+  while(!(error = read_record_info.read_record(&read_record_info))){
+    host_name.str = get_field(&mem,table->field[HOST]);
+    u_name.str = get_field(&mem,table->field[USER]);
+
+    /* First compare HOST and USER names, to determine if we've got the
+       right record. If not, go to the next record.  */
+    if(strlen(host_name.str) != host_len || 
+         strncmp(host,host_name.str,host_len) ||
+         strlen(u_name.str) != user_len ||
+         strncmp(user,u_name.str,user_len)){
+      continue;
+    }
+
+    //uinfo->otp_type = get_field(&mem,table->field[OTP_TYPE]);
+    uinfo->secret = get_field(&mem,table->field[SECRET]);
+    //uinfo->time_step = get_field(&mem,table->field[TIME_STEP]);
+    //uinfo->counter = get_field(&mem,table->field[COUNTER]);
+    //uinfo->ct_skew = get_field(&mem,table->field[COUNTER_TIME_SKEW]);
+    //uinfo->bf_max = get_field(&mem,table->field[BRUTE_FORCE_MAX]);
+    //uinfo->bf_timeout = get_field(&mem,table->field[BRUTE_FORCE_TIMEOUT]);
+    //uinfo->one_access = get_field(&mem,table->field[ONE_ACCESS_ENUM]);
+    //uinfo->last_counter = get_field(&mem,table->field[LAST_USED_COUNTER]);
+    //uinfo->last_time = get_field(&mem,table->field[LAST_USED_TIME]);
+    //uinfo->bf_count = get_field(&mem,table->field[BRUTE_FORCE_COUNTER]);
+    //uinfo->bf_block_time = get_field(&mem,table->field[BRUTE_FORCE_BLOCK_TIME]);
+    uinfo->wellknown_passwords = get_field(&mem,table->field[WELLKNOWN_PASSWORDS]);
+    break;
+  }
   return TRUE;
 }
 /* helper functino to write otp row */
@@ -242,7 +278,7 @@ void sync_otp_counter_time(struct otp_user_info* otp_row){
 /* helper function to sync last access */
 void sync_last_access(struct otp_user_info* otp_row){
   my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
-  otp_row->last_access=now.val;
+  otp_row->last_time=now.val;
   otp_row->changed=TRUE;
 }
 /* helper function to bf block */
@@ -320,7 +356,6 @@ bool create_user_otp(otp_user_info* otp_row,char* otp_password){
 /* MYSQL AUTH PLUGIN FUNCTIONS */
 static int otp_auth_interface(MYSQL_PLUGIN_VIO *vio, MYSQL_SERVER_AUTH_INFO *info)
 {
-  THD* thd;
 /*
 the structure...
 
@@ -349,6 +384,7 @@ the structure...
 */	
 	
 /* START OF DIALOG */
+
   unsigned char *pkt;
   int pkt_len;
   my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
