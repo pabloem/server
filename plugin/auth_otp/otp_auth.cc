@@ -91,17 +91,17 @@ struct otp_user_info{
   unsigned int counter;		/* hotp counter */
   unsigned int ct_skew;		/* ct retries with different values (allow time sync) */
   unsigned int bf_max;		/* bf max counter */
-  double bf_timeout;		/* seconds to lock user login */
+  longlong bf_timeout;		/* seconds to lock user login */
   bool one_access;		/* true/false if we only allow one connection per otp  */
   unsigned int last_counter;	
-  double last_time;		/* unix time stamp */
+  longlong last_time;		/* unix time stamp */
   unsigned int bf_count;
   unsigned int bf_block_time;	/* unix time stamp */
   char *wellknown_passwords;	/* must check how to create a list of passwords separated by ";" */
   
   bool changed;		        /* true = must update table */
   unsigned int calc_counter;	/* used to calculate hotp */
-  double calc_time;		/* used to calculate totp */
+  longlong calc_time;		/* used to calculate totp */
 };
 /* PLUGIN FUNCTIONS */
 
@@ -128,7 +128,7 @@ bool read_otp_table(const char *host, unsigned int host_len,
   READ_RECORD read_record_info;
   TABLE *table;
   int error;
-
+  init_sql_alloc(&mem,ACL_ALLOC_BLOCK_SIZE,0,MYF(0));
   tables.init_one_table(db_name.str,db_name.length,
                         table_name.str,table_name.length,
                         table_name.str, TL_READ);
@@ -146,28 +146,50 @@ bool read_otp_table(const char *host, unsigned int host_len,
 
     /* First compare HOST and USER names, to determine if we've got the
        right record. If not, go to the next record.  */
-    if(strlen(host_name.str) != host_len || 
-         strncmp(host,host_name.str,host_len) ||
-         strlen(u_name.str) != user_len ||
+    //    if(strlen(host_name.str) != host_len || 
+    //strncmp(host,host_name.str,host_len) ||
+    if(strlen(u_name.str) != user_len ||
          strncmp(user,u_name.str,user_len)){
       continue;
     }
-
-    //uinfo->otp_type = get_field(&mem,table->field[OTP_TYPE]);
+    char *ptr = NULL;
+    ptr = get_field(&mem,table->field[OTP_TYPE]);
+    switch(ptr[0]){
+    case 'T':
+      uinfo->otp_type = TOTP;
+      break;
+    case 'H':
+      uinfo->otp_type = HOTP;
+      break;
+    }
     uinfo->secret = get_field(&mem,table->field[SECRET]);
-    //uinfo->time_step = get_field(&mem,table->field[TIME_STEP]);
-    //uinfo->counter = get_field(&mem,table->field[COUNTER]);
-    //uinfo->ct_skew = get_field(&mem,table->field[COUNTER_TIME_SKEW]);
-    //uinfo->bf_max = get_field(&mem,table->field[BRUTE_FORCE_MAX]);
-    //uinfo->bf_timeout = get_field(&mem,table->field[BRUTE_FORCE_TIMEOUT]);
-    //uinfo->one_access = get_field(&mem,table->field[ONE_ACCESS_ENUM]);
-    //uinfo->last_counter = get_field(&mem,table->field[LAST_USED_COUNTER]);
-    //uinfo->last_time = get_field(&mem,table->field[LAST_USED_TIME]);
-    //uinfo->bf_count = get_field(&mem,table->field[BRUTE_FORCE_COUNTER]);
-    //uinfo->bf_block_time = get_field(&mem,table->field[BRUTE_FORCE_BLOCK_TIME]);
+
+    uinfo->time_step = table->field[TIME_STEP]->val_int();
+    uinfo->counter = table->field[COUNTER]->val_int();
+    uinfo->ct_skew = table->field[COUNTER_TIME_SKEW]->val_int();
+    uinfo->bf_max = table->field[BRUTE_FORCE_MAX]->val_int();
+    uinfo->bf_timeout = table->field[BRUTE_FORCE_TIMEOUT]->val_int();
+    ptr = get_field(&mem,table->field[ONE_ACCESS_ENUM]);
+    switch(ptr[0]){
+    case 'Y':
+      uinfo->one_access = TRUE;
+      break;
+    default:
+      uinfo->one_access = FALSE;
+      break;
+    }
+    uinfo->last_counter = table->field[LAST_USED_COUNTER]->val_int();
+    uinfo->last_time = table->field[LAST_USED_TIME]->val_int();
+    uinfo->bf_count = table->field[BRUTE_FORCE_COUNTER]->val_int();
+    uinfo->bf_block_time = table->field[BRUTE_FORCE_BLOCK_TIME]->val_int();
     uinfo->wellknown_passwords = get_field(&mem,table->field[WELLKNOWN_PASSWORDS]);
     break;
   }
+ end:
+  end_read_record(&read_record_info);
+  table->m_needs_reopen = TRUE; // ?
+  close_mysql_tables(thd);
+  delete thd;
   return TRUE;
 }
 /* helper functino to write otp row */
@@ -389,12 +411,18 @@ the structure...
   int pkt_len;
   my_hrtime_t now= my_hrtime();	/* unix time stamp from current time */
   otp_user_info otp_row;
+  memset(&otp_row,0,sizeof(otp_user_info));
+  int b = 0;
+  int a = 0;
 
   const char *user = info->user_name;
   unsigned int user_len = info->user_name_length;
   const char *host = info->host_or_ip;
   unsigned int host_len = info->host_or_ip_length;
-  
+  while ( a == 0 ){
+    b += 1;
+    a = 0;
+  }
   /* 1)get information from otp table  */
   if(read_otp_table(host,host_len,user,user_len,&otp_row)!=TRUE){
     // create from auth string ?
